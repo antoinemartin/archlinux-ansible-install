@@ -1,0 +1,290 @@
+---
+- name: Check existence of {{ install_device_name }} in {{ ansible_ssh_host }}
+  become: yes
+  stat: "path={{ install_device_name }}"
+  register: device
+  failed_when: not device.stat.exists
+
+- name: Check if paritions are already mounted
+  block:
+    - command: mountpoint -q {{ root_mountdir }}
+      register: root_mountpoint
+      ignore_errors: yes
+    - command: mountpoint -q {{ boot_mountdir }}
+      register: boot_mountpoint
+      ignore_errors: yes
+    - command: wc -l /proc/swaps
+      register: swap_mountpoint
+      ignore_errors: yes
+    - set_fact:
+        root_mounted: "{{ root_mountpoint.rc == 0 }}"
+        boot_mounted: "{{ boot_mountpoint.rc == 0 }}"
+        swap_mounted: "{{ swap_mountpoint.stdout.split(' ')[0] | int > 1 }}"
+        disks_mounted: "{{ root_mountpoint.rc == 0 or boot_mountpoint.rc == 0 }}"
+
+- name: Create partitions
+  become: yes
+  command: sfdisk --force {{ install_device_name }}
+  when: not disks_mounted
+  args:
+    stdin: |
+      label: gpt
+
+      size=2048, type=21686148-6449-6E6F-744E-656564454649, name="grub"
+      size=300MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="boot"
+      {% if has_swap | bool %}
+      size={{ swap_size }}, type=0657FD6D-A4AB-43C4-84E5-0933C84B4F4F, name="swap"
+      {% endif %}
+      type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="root"
+
+- name: Format EFI partition
+  become: yes
+  when: not boot_mounted
+  filesystem: dev={{ boot_partition }} fstype=vfat force=yes
+
+- name: Format swap partition
+  become: yes
+  when: not swap_mounted and (has_swap | bool)
+  command: mkswap {{ swap_partition }}
+
+- name: Format Root partition
+  when: not root_mounted
+  become: yes
+  filesystem: dev={{ root_partition }} fstype=ext4 force=yes
+
+- name: Force partition read
+  become: yes
+  command: partprobe {{ install_device_name }}
+
+- name: Mount Root partition
+  become: yes
+  when: not root_mounted
+  mount:
+    path: "{{ root_mountdir }}"
+    src: "{{ root_partition }}"
+    state: mounted
+    fstype: ext4
+
+- name: Mount EFI partition
+  become: yes
+  when: not boot_mounted
+  mount:
+    path: "{{ boot_mountdir }}"
+    src: "{{ boot_partition }}"
+    state: mounted
+    fstype: vfat
+
+- name: Enable swap
+  become: yes
+  when: not swap_mounted and (has_swap | bool)
+  command: swapon {{ swap_partition }}
+
+- name: Initialize base system
+  become: yes
+  command: pacstrap {{ root_mountdir }} {{ packages | join(' ') }} --needed
+
+- name: Generate fstab
+  become: yes
+  blockinfile:
+    path: "{{ root_mountdir }}/etc/fstab"
+    backup: yes
+    insertafter: "^# <file system>"
+    block: |
+      PARTLABEL=root / ext4 rw,relatime 0 1
+      PARTLABEL=boot {{ boot_dirname }} vfat rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=iso8859-1,shortname=mixed,utf8,errors=remount-ro 0 2
+      {% if has_swap | bool %}
+      PARTLABEL=swap none	swap	defaults	0	0
+      {% endif %}
+
+- name: Copy scripts
+  become: yes
+  copy:
+    src: "files/{{ item }}"
+    dest: "{{ root_mountdir }}/usr/bin/"
+    owner: root
+    group: root
+    mode: u=rwx,g=rx,o=rx
+  with_items:
+    - reanimate-pacman
+
+- name: Copy service unit files
+  become: yes
+  copy:
+    src: "files/{{ item }}.service"
+    dest: "{{ root_mountdir }}/etc/systemd/system"
+    owner: root
+    group: root
+    mode: u=rw,g=r,o=r
+  with_items:
+    - pacman-reanimation
+
+- name: Copy templates
+  become: yes
+  template:
+    src: "{{ item.name }}"
+    dest: "{{ root_mountdir }}{{ item.dest }}"
+    owner: root
+    group: root
+    mode: u=rw,g=r,o=r
+  with_items:
+    - { name: "hosts", dest: "/etc" }
+    - { name: "timesyncd.conf", dest: "/etc/systemd" }
+    - { name: "eth0-dhcp.network", dest: "/etc/systemd/network" }
+    - { name: "locale.gen", dest: "/etc" }
+
+- name: Delete resolv.conf file
+  become: true
+  file:
+    state: absent
+    path: "{{ root_mountdir }}/etc/resolv.conf"
+
+- name: "Set hostname to {{ archlinux_hostname  }}"
+  become: true
+  copy: dest="{{ root_mountdir }}/etc/hostname" content="{{ archlinux_hostname }}"
+
+- name: "Set language to {{ archlinux_locale }}"
+  become: true
+  copy: dest="{{ root_mountdir }}/etc/locale.conf" content="LANG={{ archlinux_locale }}"
+
+- name: "Set keymap to {{ archlinux_keymap }}"
+  become: true
+  copy: dest="{{ root_mountdir }}/etc/vconsole.conf" content="KEYMAP={{ archlinux_keymap }}"
+
+- name: Configure system
+  become: yes
+  command:
+    argv:
+      - /usr/bin/arch-chroot
+      - "{{ root_mountdir }}"
+      - /bin/bash
+      - -c
+      - |
+        ln -sf /usr/share/zoneinfo/{{ archlinux_timezone }} /etc/localtime
+        hwclock --systohc
+        # To have classical eth0, eth1 names
+        ln -sf /dev/null /etc/udev/rules.d/80-net-setup-link.rules
+        systemctl enable systemd-networkd systemd-resolved systemd-timesyncd haveged.service pacman-reanimation.service sshd.service
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+        # This is for docker
+        touch /etc/subuid
+        touch /etc/subgid
+        # Bastion user
+        /usr/bin/userdel --force --remove {{ archlinux_username }} || /bin/true
+        /usr/bin/useradd --comment 'Arch User' --create-home --user-group --uid 1000 --shell {{ archlinux_shell }} --non-unique {{ archlinux_username }}
+        /usr/bin/usermod --groups adm,wheel {{ archlinux_username }}
+        {% if archlinux_password != '-' %}
+        echo -e "{{ archlinux_password }}\n{{ archlinux_password }}" | passwd {{ archlinux_username }}
+        {% endif %}
+        /usr/bin/locale-gen
+
+- name: Make {{ archlinux_username }} a sudoer without password
+  copy:
+    dest: "{{ root_mountdir }}/etc/sudoers.d/10_{{ archlinux_username }}"
+    owner: root
+    group: root
+    mode: 0644
+    content: |
+      Defaults env_keep += "SSH_AUTH_SOCK"
+      {{ archlinux_username }} ALL=(ALL) NOPASSWD: ALL
+
+- name: Create /home/{{ archlinux_username }}/.bashrc
+  when: archlinux_shell == '/bin/bash'
+  copy:
+    dest: "{{ root_mountdir }}/home/{{ archlinux_username }}/.bashrc"
+    owner: "1000"
+    group: "1000"
+    mode: 0644
+    src: files/bashrc
+
+- name: Create /home/{{ archlinux_username }}/.zshrc
+  when: archlinux_shell == '/bin/zsh'
+  copy:
+    dest: "{{ root_mountdir }}/home/{{ archlinux_username }}/.zshrc"
+    owner: "1000"
+    group: "1000"
+    mode: 0644
+    src: files/zshrc
+
+- name: Create /home/{{ archlinux_username }}/.ssh
+  become: yes
+  file:
+    path: "{{ root_mountdir }}/home/{{ archlinux_username }}/.ssh"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: 0700
+
+- name: Create /home/{{ archlinux_username }}/.ssh/authorized_keys
+  become: yes
+  copy:
+    dest: "{{ root_mountdir }}/home/{{ archlinux_username }}/.ssh/authorized_keys"
+    content: "{{ archlinux_ssh_key }}"
+    owner: "1000"
+    group: "1000"
+    mode: 0600
+
+- name: check if linux image exists
+  become: yes
+  stat: path="{{ boot_mountdir }}/initramfs-linux.img"
+  register: kernel_image_present
+
+- name: Run mkinitcpio
+  when: not kernel_image_present.stat.exists
+  become: yes
+  command: "/usr/bin/arch-chroot {{ root_mountdir }} {{ item }}"
+  loop:
+    - mkinitcpio -p linux
+
+- name: Install UEFI Grub
+  tags: bootloader
+  when: install_bootloader and has_grub
+  become: yes
+  command:
+    argv:
+      - /usr/bin/arch-chroot
+      - "{{ root_mountdir }}"
+      - /bin/bash
+      - -c
+      - |
+        sed -ie 's|^GRUB_CMDLINE_LINUX=""|GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"|g' /etc/default/grub
+        [ -d /sys/firmware/efi ] && grub-install --target=x86_64-efi --efi-directory={{ boot_dirname }} --bootloader-id=grub {{ grub_options }} --removable
+        grub-install --target=i386-pc {{ install_device_name }} 
+        grub-mkconfig -o {{ boot_dirname }}/grub/grub.cfg
+
+- name: Install UEFI systemd-boot
+  tags: bootloader
+  when: install_bootloader and not has_grub
+  become: yes
+  command: /usr/bin/arch-chroot {{ root_mountdir }} bootctl {{ systemd_boot_options }} install
+
+- name: Copy UEFI shell if present locally
+  tags: bootloader
+  when: install_bootloader and not has_grub
+  become: yes
+  ignore_errors: true
+  copy:
+    remote_src: yes
+    src: /run/archiso/bootmnt/shellx64.efi
+    dest: "{{ boot_mountdir }}/shellx64.efi"
+
+- name: Copy bootloader templates
+  tags: bootloader
+  become: yes
+  when: install_bootloader and not has_grub
+  template:
+    src: "{{ item.name }}"
+    dest: "{{ root_mountdir }}{{ item.dest }}"
+    owner: root
+    group: root
+    mode: u=rw,g=r,o=r
+  with_items:
+    - { name: "loader.conf", dest: "/boot/loader" }
+    - { name: "arch.conf", dest: "/boot/loader/entries" }
+    - { name: "arch_fallback.conf", dest: "/boot/loader/entries" }
+
+- name: Unmount partitions
+  become: yes
+  mount:
+    path: "{{ item }}"
+    state: unmounted
+  loop: ["{{ boot_mountdir }}", "{{ root_mountdir }}"]

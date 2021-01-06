@@ -1,0 +1,11 @@
+[Unit]
+Description=Pacman reanimation
+After=network.target
+Before=sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/reanimate-pacman
+
+[Install]
+WantedBy=multi-user.target

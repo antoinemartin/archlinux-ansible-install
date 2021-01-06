@@ -1,0 +1,7 @@
+---
+- name: Base install
+  tags: base_install
+  hosts: archlinux
+  gather_facts: yes
+  roles:
+    - role: system_archlinux_install

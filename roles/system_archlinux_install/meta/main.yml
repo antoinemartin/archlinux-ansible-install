@@ -1,0 +1,15 @@
+galaxy_info:
+  author: Antoine Martin
+  description: Basic Arch Linux installation role
+  company: Unowhy
+  issue_tracker_url: https://github.com/antoinemartin/archlinux-ansible-install/issues
+  license: Apache
+
+  min_ansible_version: 2.8
+
+  galaxy_tags:
+    - devops
+    - archlinux
+    - system
+
+dependencies: []

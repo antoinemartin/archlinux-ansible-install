@@ -1,0 +1,61 @@
+mmc: "{{ lookup('env', 'ARCHINSTALL_MMC') or 'no' }}"
+install_device_name: "{{ mmc | bool | ternary('/dev/mmcblk1', '/dev/sda') }}"
+state: present
+
+has_swap: yes
+swap_size: 1Gib
+
+archlinux_hostname: "{{ lookup('env', 'ARCHINSTALL_HOSTNAME') or 'arch' }}"
+archlinux_username: "{{ lookup('env', 'ARCHINSTALL_USERNAME') or 'arch' }}"
+archlinux_password: "{{ lookup('env', 'ARCHINSTALL_PASSWORD') or '-' }}"
+# or /bin/bash
+archlinux_shell: /bin/zsh
+
+archlinux_ssh_key_github_account: "{{ lookup('env', 'ARCHINSTALL_SSH_KEY_GITHUB_ACCOUNT') or 'antoinemartin' }}"
+archlinux_ssh_key: "{{ lookup( 'url', archlinux_ssh_key_url, split_lines=False ) | from_json | json_query('[0].key') }}"
+
+archlinux_locale: "en_US.UTF-8"
+# additional locale
+archlinux_additional_locale: "fr_FR.UTF-8"
+archlinux_timezone: "Europe/Paris"
+archlinux_keymap: "fr"
+archlinux_ntp_country: fr
+# define to define (sic) a password for root (not recommended)
+# archlinux_root_password: "rootpassword"
+
+base_packages:
+  - base
+  - mkinitcpio
+  - linux
+  - linux-firmware
+  - vi
+  - python
+  - python-pip
+  - wget
+  - curl
+  - git
+  - openssh
+  - pacman-contrib
+  - haveged
+  - sudo
+  - bash-completion
+  - which
+
+grub_packages:
+  - grub
+  - efibootmgr
+
+zsh_packages:
+  - zsh
+  - zsh-completions
+  - zsh-syntax-highlighting
+  - zsh-autosuggestions
+
+packages: "{{ base_packages + (has_grub | ternary(grub_packages, [])) + (has_zsh | ternary(zsh_packages, [])) }}"
+
+install_bootloader: yes
+# either systemd-boot or grub
+bootloader: grub
+boot_dirname: "/boot"
+root_mountdir: "/mnt"
+bootloader_nvram: yes

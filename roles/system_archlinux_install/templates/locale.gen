@@ -1,0 +1,4 @@
+en_US.UTF-8 UTF-8
+{% if archlinux_additional_locale is defined %}
+{{ archlinux_additional_locale }} UTF-8
+{% endif %}

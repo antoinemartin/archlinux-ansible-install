@@ -1,0 +1,4 @@
+ansible_connection: ssh
+ansible_ssh_port: "{{ lookup('env', 'ARCHINSTALL_SSH_PORT') or '22' | int }}"
+ansible_python_interpreter: /usr/bin/python
+archlinux_hostname: "{{ lookup('env', 'ARCHINSTALL_HOSTNAME') or 'arch' }}"

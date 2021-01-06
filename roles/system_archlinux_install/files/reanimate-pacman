@@ -1,0 +1,7 @@
+#! /bin/bash
+if [[ -e /etc/pacman.d/gnupg ]]; then
+        exit 0
+fi
+
+/usr/bin/pacman-key --init
+/usr/bin/pacman-key --populate archlinux

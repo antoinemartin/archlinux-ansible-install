@@ -300,4 +300,6 @@ And you can also reboot without the `-bios` option to test in BIOS mode:
 
 ## Alternatives
 
-For virtual machines, [packer-arch] provides a similar configuration.
+For virtual machines,
+[packer-arch](https://github.com/elasticdog/packer-arch) provides a similar
+configuration.

@@ -303,3 +303,7 @@ And you can also reboot without the `-bios` option to test in BIOS mode:
 For virtual machines,
 [packer-arch](https://github.com/elasticdog/packer-arch) provides a similar
 configuration.
+
+For laptop and desktop computers, [spark](https://github.com/pigmonkey/spark) and 
+[ansible-arch](https://github.com/lgaggini/ansible-arch) provide more installation
+options.
